@@ -24,6 +24,8 @@ public class NioServer {
                 try {
                     SelectionKey key = iterator.next();
                     iterator.remove();
+                    System.out.println("key.isAcceptable() = " + key.isAcceptable() + " key.isReadable() = "
+                            + key.isReadable() + " key.isWritable() = " + key.isWritable());
                     if (key.isAcceptable()) {
                         SocketChannel clientChannel = serverChannel.accept();
                         clientChannel.configureBlocking(false);
@@ -49,6 +51,7 @@ public class NioServer {
                                 }
                             }
                         } catch (IOException e) {
+                            e.printStackTrace();
                             key.cancel();
                             System.out.printf("客户端[%s]已关闭连接", clientChannel.socket().getPort());
                         }

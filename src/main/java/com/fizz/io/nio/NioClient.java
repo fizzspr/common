@@ -43,6 +43,9 @@ public class NioClient {
                 SelectionKey key = iterator.next();
                 iterator.remove();
 
+                System.out.println("key.isAcceptable() = " + key.isAcceptable() + " key.isReadable() = "
+                        + key.isReadable() + " key.isWritable() = " + key.isWritable());
+
                 if(key.isConnectable()){
                     SocketChannel clientSocket = (SocketChannel)key.channel();
                     //这里需要检测是否完成连接
