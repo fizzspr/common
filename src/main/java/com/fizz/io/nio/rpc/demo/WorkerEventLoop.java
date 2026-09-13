@@ -1,5 +1,6 @@
 package com.fizz.io.nio.rpc.demo;
 
+import com.fizz.utils.NamedThreadFactory;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -10,14 +11,25 @@ import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 @Slf4j
 public class WorkerEventLoop implements Runnable {
 
+    private static final ExecutorService BUSINESS_POOL = Executors.newFixedThreadPool(
+            Runtime.getRuntime().availableProcessors() * 2,
+            new NamedThreadFactory("rpc-business"));
+
     private final Selector selector;
     private final Queue<Runnable> taskQueue = new ConcurrentLinkedQueue<>();
+
+    /**
+     * 服务注册表：在构造时注册一次，请求路径上只读
+     */
+    private final Map<String, Object> serviceMap = new HashMap<>();
 
     public WorkerEventLoop() {
         try {
@@ -25,6 +37,9 @@ public class WorkerEventLoop implements Runnable {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+
+        // 服务实例只创建/注册一次，请求路径上不再创建
+        serviceMap.put("com.fizz.io.nio.rpc.RpcService", new RpcServiceImpl());
 
         Thread thread = new Thread(this, "worker-event-loop");
         thread.setDaemon(true);
@@ -188,27 +203,32 @@ public class WorkerEventLoop implements Runnable {
         String methodName = new String(bytes, 68, 16).trim();
         String param = new String(bytes, 84, 128).trim();
 
-        new Thread(() -> {
-            Map<String, Object> map = new HashMap<>();
-            map.put("com.fizz.io.nio.rpc.RpcService", new RpcServiceImpl());
-
-            Object o = map.get(interfaceName);
+        BUSINESS_POOL.execute(() -> {
+            RpcResponse response;
             try {
-                Method method = o.getClass().getMethod(methodName, String.class);
-                Object invoke = method.invoke(o, param);
-                attr.getResponseQueue().add(new RpcResponse(uuid, invoke));
-
-                // 注册写事件必须投递到 IO 线程执行，避免与写分支并发修改 interestOps
-                execute(() -> {
-                    SelectionKey key = attr.getSelectionKey();
-                    if (key.isValid()) {
-                        key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
-                    }
-                });
-                log.info("uuid:{}, 执行接口:{}, 方法: {}, 结果: {}", uuid, interfaceName, methodName, invoke);
+                Object service = serviceMap.get(interfaceName);
+                if (service == null) {
+                    throw new IllegalStateException("service not found: " + interfaceName);
+                }
+                Method method = service.getClass().getMethod(methodName, String.class);
+                Object result = method.invoke(service, param);
+                response = new RpcResponse(uuid, result);
+                log.info("uuid:{}, 执行接口:{}, 方法: {}, 结果: {}", uuid, interfaceName, methodName, result);
             } catch (Exception e) {
-                throw new RuntimeException(e);
+                log.error("uuid:{}, 接口:{}, 方法:{} 调用失败", uuid, interfaceName, methodName, e);
+                // 失败也要回响应，避免客户端永久等待
+                response = new RpcResponse(uuid, "ERROR: " + e);
             }
-        }).start();
+
+            attr.getResponseQueue().add(response);
+
+            // 注册写事件必须投递到 IO 线程执行，避免与写分支并发修改 interestOps
+            execute(() -> {
+                SelectionKey key = attr.getSelectionKey();
+                if (key.isValid()) {
+                    key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+                }
+            });
+        });
     }
 }
