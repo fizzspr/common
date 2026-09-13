@@ -17,7 +17,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 public class WorkerEventLoop implements Runnable {
 
     private final Selector selector;
-    private Queue<SocketChannel> queue = new ConcurrentLinkedQueue<>();
+    private final Queue<Runnable> taskQueue = new ConcurrentLinkedQueue<>();
 
     public WorkerEventLoop() {
         try {
@@ -31,9 +31,25 @@ public class WorkerEventLoop implements Runnable {
         thread.start(); // 只启动一次
     }
 
-    public void register(SocketChannel socketChannel) {
-        queue.add(socketChannel);
+    /**
+     * 提交任务到 IO 线程执行；可从任意线程调用。
+     * 所有涉及 Selector/SelectionKey 的操作都必须经由此方法投递。
+     */
+    public void execute(Runnable task) {
+        taskQueue.add(task);
         selector.wakeup();
+    }
+
+    public void register(SocketChannel socketChannel) {
+        execute(() -> {
+            try {
+                socketChannel.configureBlocking(false);
+                socketChannel.register(selector, SelectionKey.OP_READ);
+            } catch (Exception e) {
+                log.error("register 失败", e);
+                try { socketChannel.close(); } catch (IOException ignored) { }
+            }
+        });
     }
 
     @Override
@@ -46,17 +62,12 @@ public class WorkerEventLoop implements Runnable {
                 throw new RuntimeException(e);
             }
 
-            while (true) {
-                SocketChannel socketChannel = queue.poll();
-                if (socketChannel == null) {
-                    break;
-                }
+            Runnable task;
+            while ((task = taskQueue.poll()) != null) {
                 try {
-                    socketChannel.configureBlocking(false);
-                    socketChannel.register(selector, SelectionKey.OP_READ);
+                    task.run();
                 } catch (Exception e) {
-                    log.error("register 失败", e);
-                    try { socketChannel.close(); } catch (IOException ignored) { }
+                    log.error("task 执行失败", e);
                 }
             }
 
@@ -187,10 +198,13 @@ public class WorkerEventLoop implements Runnable {
                 Object invoke = method.invoke(o, param);
                 attr.getResponseQueue().add(new RpcResponse(uuid, invoke));
 
-                // 注册写事件并唤醒 select，让事件循环线程尽快把响应写出去
-                SelectionKey selectionKey = attr.getSelectionKey();
-                selectionKey.interestOps(selectionKey.interestOps() | SelectionKey.OP_WRITE);
-                selectionKey.selector().wakeup();
+                // 注册写事件必须投递到 IO 线程执行，避免与写分支并发修改 interestOps
+                execute(() -> {
+                    SelectionKey key = attr.getSelectionKey();
+                    if (key.isValid()) {
+                        key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+                    }
+                });
                 log.info("uuid:{}, 执行接口:{}, 方法: {}, 结果: {}", uuid, interfaceName, methodName, invoke);
             } catch (Exception e) {
                 throw new RuntimeException(e);
