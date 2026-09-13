@@ -3,6 +3,7 @@ package com.fizz.io.nio.rpc.demo;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
@@ -11,6 +12,7 @@ import java.nio.channels.SocketChannel;
 import java.util.*;
 
 import static com.fizz.io.nio.rpc.demo.ByteBufferSupport.toFixedBytesByBuffer;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 @Slf4j
 public class NioClient {
@@ -38,7 +40,7 @@ public class NioClient {
 //                    String param = split[2];
 
                     List<ByteBuffer> list = new ArrayList<>();
-                    for (int i = 0; i < 10; i++) {
+                    for (int i = 0; i < 1; i++) {
                         String interfaceName = "com.fizz.io.nio.rpc.RpcService";
                         String methodName = "hello";
                         String param = "xiaoming" + i;
@@ -91,9 +93,54 @@ public class NioClient {
                         log.info("客户端[{}]连接失败", socketChannel.socket().getLocalPort());
                         System.exit(1);
                     }
+                } else if (key.isReadable()) {
+                    SocketChannel clientChannel = (SocketChannel) key.channel();
+                    ChannelAttr attachment = (ChannelAttr) key.attachment();
+                    if (attachment == null) {
+                        attachment = new ChannelAttr(clientChannel, key);
+                        key.attach(attachment);
+                    }
+
+                    ByteBuffer buffer = attachment.expandIfNeeded();
+                    try {
+                        int n = clientChannel.read(buffer);
+                        log.info("read {} bytes, position: {}, limit: {}, capacity: {}", n, buffer.position(), buffer.limit(), buffer.capacity());
+                        if (n == -1) {
+                            clientChannel.close();
+                        } else {
+                            split(buffer, clientChannel, attachment);
+                        }
+                    } catch (IOException e) {
+                        key.channel().close();
+                        log.info("客户端[{}]异常关闭连接", clientChannel.socket().getPort(), e);
+                    }
                 }
             }
         }
+    }
+
+    private static void split(ByteBuffer source, SocketChannel clientChannel, ChannelAttr attr) throws IOException {
+        source.flip();
+        int remaining = source.remaining();
+        for (int i = 0; i < remaining; i++) {
+            if (source.get(i) == '\n') {
+                // i是下标，长度需要+1
+                byte[] bytes = new byte[i + 1 - source.position()];
+                source.get(bytes);
+                log.info("收到服务端[{}]一条完整消息：{}", clientChannel.socket().getPort(), new String(bytes, UTF_8));
+
+                doWork(bytes, attr);
+            }
+        }
+
+        source.compact();
+    }
+
+    private static void doWork(byte[] bytes, ChannelAttr attr) {
+        String uuid = new String(bytes, 0, 36).trim();
+        String result = new String(bytes, 36, bytes.length - 36).trim();
+
+        log.info("RPC接口已返回, uuid:{}, 结果: {}", uuid, result);
     }
 
 }
