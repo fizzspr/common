@@ -1,4 +1,4 @@
-package com.fizz.io.nio.d1;
+package com.fizz.io.nio.rpc.demo;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -8,8 +8,9 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
-import java.util.Iterator;
-import java.util.Scanner;
+import java.util.*;
+
+import static com.fizz.io.nio.rpc.demo.ByteBufferSupport.toFixedBytesByBuffer;
 
 @Slf4j
 public class NioClient {
@@ -30,11 +31,39 @@ public class NioClient {
                         socketChannel.close();
                         break;
                     }
-                    s += '\n';
-                    socketChannel.write(ByteBuffer.wrap(s.getBytes()));
+
+//                    String[] split = s.split(",");
+//                    String interfaceName = split[0];
+//                    String methodName = split[1];
+//                    String param = split[2];
+
+                    List<ByteBuffer> list = new ArrayList<>();
+                    for (int i = 0; i < 10; i++) {
+                        String interfaceName = "com.fizz.io.nio.rpc.RpcService";
+                        String methodName = "hello";
+                        String param = "xiaoming" + i;
+                        // 拼装协议字节数据
+                        ByteBuffer msg = ByteBuffer.allocate(36 + 32 + 16 +128 + 1);
+                        ByteBuffer interfaceNameBB = toFixedBytesByBuffer(interfaceName, 32);
+                        ByteBuffer methodNameBB = toFixedBytesByBuffer(methodName, 16);
+                        ByteBuffer paramBB = toFixedBytesByBuffer(param, 128);
+                        msg.put(UUID.randomUUID().toString().getBytes());
+                        msg.put(interfaceNameBB);
+                        msg.put(methodNameBB);
+                        msg.put(paramBB);
+                        msg.put((byte) '\n');
+
+                        msg.flip();
+                        list.add(msg);
+                    }
+
+                    for (ByteBuffer byteBuffer : list) {
+                        socketChannel.write(byteBuffer);
+                    }
+
                 }
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                log.error(e.getMessage(), e);
             }
         }).start();
 

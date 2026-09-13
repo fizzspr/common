@@ -1,19 +1,22 @@
-package com.fizz.io.nio.d1;
+package com.fizz.io.nio.rpc.demo;
 
 import com.fizz.utils.ByteBufferUtil;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
+import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
-import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Iterator;
+import java.util.Map;
+import java.util.Set;
 
-import static com.fizz.utils.ByteBufferUtil.debugAll;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 
@@ -33,7 +36,9 @@ public class NioServer {
                 log.info("select <= 0");
                 continue;
             }
-            Iterator<SelectionKey> iterator = selector.selectedKeys().iterator();
+            Set<SelectionKey> selectionKeys = selector.selectedKeys();
+            Iterator<SelectionKey> iterator = selectionKeys.iterator();
+            log.info("select {}, keySize:{}", select, selectionKeys.size());
             while (iterator.hasNext()) {
                 try {
                     SelectionKey key = iterator.next();
@@ -49,7 +54,7 @@ public class NioServer {
                         SocketChannel clientChannel = (SocketChannel) key.channel();
                         ByteBuffer attachment = (ByteBuffer) key.attachment();
                         if (attachment == null) {
-                            ByteBuffer bb = ByteBuffer.allocate(2);
+                            ByteBuffer bb = ByteBuffer.allocate(200);
                             key.attach(bb);
                             attachment = bb;
                         }
@@ -63,6 +68,7 @@ public class NioServer {
                                 attachment = newAttr;
                             }
                             int n = clientChannel.read(attachment);
+                            log.info("read {} bytes, position: {}, limit: {}, capacity: {}", n, attachment.position(), attachment.limit(), attachment.capacity());
                             if (n == -1) {
                                 clientChannel.close();
                             } else {
@@ -86,12 +92,39 @@ public class NioServer {
         for (int i = 0; i < remaining; i++) {
             if (source.get(i) == '\n') {
                 // i是下标，长度需要+1
-                byte[] bytes = new byte[i+1];
+                byte[] bytes = new byte[i + 1 - source.position()];
                 source.get(bytes);
                 log.info("收到客户端[{}]一条完整消息：{}", clientChannel.socket().getPort(), new String(bytes, UTF_8));
+
+                doWork(bytes);
             }
         }
 
         source.compact();
+    }
+
+    private static void doWork(byte[] bytes) {
+        String uuid = new String(bytes, 0, 36).trim();
+        String interfaceName = new String(bytes, 36, 32).trim();
+        String methodName = new String(bytes, 68, 16).trim();
+        String param = new String(bytes, 84, 128).trim();
+
+        new Thread(() -> {
+            Map<String, Object> map = new HashMap<>();
+            map.put("com.fizz.io.nio.rpc.RpcService", new RpcServiceImpl());
+
+            Object o = map.get(interfaceName);
+            try {
+                Method method = o.getClass().getMethod(methodName, String.class);
+                Object invoke = method.invoke(o, param);
+                log.info("uuid:{}, 执行接口:{}, 方法: {}, 结果: {}", uuid, interfaceName, methodName, invoke);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }).start();
+    }
+
+    static class UserThread extends Thread {
+
     }
 }

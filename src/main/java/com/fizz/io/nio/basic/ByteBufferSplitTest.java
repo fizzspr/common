@@ -1,4 +1,4 @@
-package com.fizz.io.nio;
+package com.fizz.io.nio.basic;
 
 import java.nio.ByteBuffer;
 
