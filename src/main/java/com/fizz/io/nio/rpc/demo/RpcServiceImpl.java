@@ -9,8 +9,8 @@ public class RpcServiceImpl implements RpcService {
     @Override
     public String hello(String name) {
         try {
-            log.info("================hello执行中=====================");
-            Thread.sleep(5000);
+//            log.info("================hello执行中=====================");
+//            Thread.sleep(5000);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
