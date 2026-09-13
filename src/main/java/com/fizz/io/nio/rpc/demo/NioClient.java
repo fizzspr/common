@@ -34,13 +34,8 @@ public class NioClient {
                         break;
                     }
 
-//                    String[] split = s.split(",");
-//                    String interfaceName = split[0];
-//                    String methodName = split[1];
-//                    String param = split[2];
-
                     List<ByteBuffer> list = new ArrayList<>();
-                    for (int i = 0; i < 1; i++) {
+                    for (int i = 0; i < 10; i++) {
                         String interfaceName = "com.fizz.io.nio.rpc.RpcService";
                         String methodName = "hello";
                         String param = "xiaoming" + i;
