@@ -10,6 +10,7 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 import java.util.*;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static com.fizz.io.nio.rpc.demo.ByteBufferSupport.toFixedBytesByBuffer;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -23,6 +24,9 @@ public class NioClient {
         Selector selector = Selector.open();
         socketChannel.register(selector, SelectionKey.OP_CONNECT);
         socketChannel.connect(inetSocketAddress);
+
+        // 待发队列：Scanner 线程只入队 + wakeup，实际写由 select 线程执行，避免跨线程写产生竞态
+        Queue<ByteBuffer> outQueue = new ConcurrentLinkedQueue<>();
 
         new Thread(() -> {
             try {
@@ -55,8 +59,10 @@ public class NioClient {
                     }
 
                     for (ByteBuffer byteBuffer : list) {
-                        socketChannel.write(byteBuffer);
+                        outQueue.add(byteBuffer);
                     }
+                    // 唤醒 select 线程，由它把消息发出去
+                    selector.wakeup();
 
                 }
             } catch (IOException e) {
@@ -64,8 +70,14 @@ public class NioClient {
             }
         }).start();
 
+        ByteBuffer pendingWrite = null; // 未写完的数据，仅 select 线程访问
+
         while (true) {
             int select = selector.select();
+
+            // 每轮都尽量把待发消息写出去，写不完的数据等可写事件续写
+            pendingWrite = flush(socketChannel, pendingWrite, outQueue, selector);
+
             if (select <= 0) {
                 log.info("select <= 0");
                 continue;
@@ -136,6 +148,56 @@ public class NioClient {
         String result = new String(bytes, 36, bytes.length - 36).trim();
 
         log.info("RPC接口已返回, uuid:{}, 结果: {}", uuid, result);
+    }
+
+    /**
+     * 依次写出待发数据；返回未写完的 buffer（等可写事件续写），全部写完返回 null
+     */
+    private static ByteBuffer flush(SocketChannel channel, ByteBuffer pending, Queue<ByteBuffer> outQueue, Selector selector) {
+        if (pending == null && outQueue.isEmpty()) {
+            return null; // 没有待发数据
+        }
+        try {
+            if (pending != null && writeFully(channel, pending)) {
+                pending = null;
+            }
+            if (pending == null) {
+                ByteBuffer buf;
+                while ((buf = outQueue.poll()) != null) {
+                    if (!writeFully(channel, buf)) {
+                        pending = buf; // 内核发送缓冲已满，保留剩余部分
+                        break;
+                    }
+                }
+            }
+
+            SelectionKey key = channel.keyFor(selector);
+            if (key != null && key.isValid()) {
+                int ops = key.interestOps();
+                int newOps = pending != null ? (ops | SelectionKey.OP_WRITE) : (ops & ~SelectionKey.OP_WRITE);
+                if (newOps != ops) {
+                    key.interestOps(newOps);
+                }
+            }
+            return pending;
+        } catch (IOException e) {
+            log.error("发送失败，关闭连接", e);
+            try { channel.close(); } catch (IOException ignored) { }
+            return null;
+        }
+    }
+
+    /**
+     * 尽力把 buffer 写出去；true=已全部写完，false=内核发送缓冲已满，需要等下次可写事件
+     */
+    private static boolean writeFully(SocketChannel channel, ByteBuffer buffer) throws IOException {
+        while (buffer.hasRemaining()) {
+            int n = channel.write(buffer);
+            if (n == 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
 }

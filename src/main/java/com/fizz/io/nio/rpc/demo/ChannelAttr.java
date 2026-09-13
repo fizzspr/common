@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 @Data
 public class ChannelAttr {
 
-    private static final int INITIAL_CAPACITY = 200;
+    private static final int INITIAL_CAPACITY = 20;
 
     private SocketChannel socketChannel;
 
@@ -29,6 +29,11 @@ public class ChannelAttr {
      * 未写完的响应数据，等下次可写事件继续写
      */
     private ByteBuffer pendingWrite;
+
+    /**
+     * 待发送队列：写不完时消息暂存，等可写事件续写
+     */
+    private Queue<ByteBuffer> outQueue = new ConcurrentLinkedQueue<>();
 
     private Map<String, Object> data = new ConcurrentHashMap<>(256);
 
