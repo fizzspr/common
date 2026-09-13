@@ -20,11 +20,13 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 public class MultiThreadNioClient {
     public static void main(String[] args) throws Exception {
 
-        ExecutorService executorService = Executors.newFixedThreadPool(10);
+        // 线程池大小必须不小于连接数：每个连接任务都是常驻的 select 循环，占满线程后不会归还
+        int connectionCount = 1000;
+        ExecutorService executorService = Executors.newFixedThreadPool(connectionCount);
 
         AtomicInteger count = new AtomicInteger(0);
 
-        for (int j = 0; j < 10; j++) {
+        for (int j = 0; j < connectionCount; j++) {
             executorService.submit(() -> {
                 try {
                     SocketChannel socketChannel = SocketChannel.open();
